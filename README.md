@@ -2,11 +2,9 @@
   <img src="https://i.imgur.com/CxkUxTs.png" alt="alt logo">
 </p>
 
-[![GitHub release](https://img.shields.io/github/release/nxrighthere/ENet-CSharp.svg)](https://github.com/nxrighthere/ENet-CSharp/releases) [![NuGet](https://img.shields.io/nuget/v/ENet-CSharp.svg)](https://www.nuget.org/packages/ENet-CSharp/) [![PayPal](https://github.com/Rageware/Shields/blob/master/paypal.svg)](https://www.paypal.me/nxrighthere) [![Bountysource](https://github.com/Rageware/Shields/blob/master/bountysource.svg)](https://salt.bountysource.com/checkout/amount?team=nxrighthere) [![Coinbase](https://github.com/Rageware/Shields/blob/master/coinbase.svg)](https://commerce.coinbase.com/checkout/03e11816-b6fc-4e14-b974-29a1d0886697)
+[![GitHub release](https://img.shields.io/github/release/nxrighthere/ENet-CSharp.svg?style=flat-square)](https://github.com/nxrighthere/ENet-CSharp/releases) [![NuGet](https://img.shields.io/nuget/v/ENet-CSharp.svg?style=flat-square)](https://www.nuget.org/packages/ENet-CSharp/) [![PayPal](https://github.com/Rageware/Shields/blob/master/paypal.svg)](https://www.paypal.me/nxrighthere) [![Bountysource](https://github.com/Rageware/Shields/blob/master/bountysource.svg)](https://salt.bountysource.com/checkout/amount?team=nxrighthere) [![Coinbase](https://github.com/Rageware/Shields/blob/master/coinbase.svg)](https://commerce.coinbase.com/checkout/03e11816-b6fc-4e14-b974-29a1d0886697)
 
-This project is based on collaborative work with [@inlife](https://github.com/inlife) and inherited all features of the custom [fork](https://github.com/zpl-c/enet) where the native library was heavily modified. You can find the most notable changes [here](https://github.com/nxrighthere/ENet-CSharp/blob/master/CHANGES.md). This version is extended, optimized, and involves new features that were not available before to boost the development process and run safely in the managed .NET environment with the highest possible performance.
-
-Although the project is called ENet-CSharp, this is not just a C# wrapper for the native C library, but an independent fork which is incompatible with any other ENet implementation including the [original](https://github.com/lsalzman/enet) since 2.0.0 version. Programmers who are using C/C++ languages can utilize this fork as well in any projects such as [NetDynamics](https://github.com/nxrighthere/NetDynamics).
+This is an independent ENet implementation with a modified protocol for C, C++, C#, and other languages.
 
 Features:
 
@@ -43,6 +41,8 @@ You can grab compiled libraries from the [release](https://github.com/nxrighther
 `ENet-CSharp` contains compiled assembly with native libraries for the .NET environment (.NET Standard 2.0).
 
 `ENet-Unity` contains script with native libraries for the Unity.
+
+It's highly recommended to delete a folder with binaries instead of replacing it to upgrade.
 
 These packages are provided only for traditional platforms: Windows, Linux, and macOS (x64).
 
@@ -266,16 +266,16 @@ Definitions of peer states for `Peer.State` property:
 #### Memory callbacks
 Provides per application events.
 
-`AllocCallback(IntPtr size)` notifies when a memory is requested for allocation. Expects pointer to the newly allocated memory.
+`AllocCallback(IntPtr size)` notifies when a memory is requested for allocation. Expects pointer to the newly allocated memory. A reference to the delegate should be preserved from being garbage collected.
 
-`FreeCallback(IntPtr memory)` notifies when the memory can be freed.
+`FreeCallback(IntPtr memory)` notifies when the memory can be freed. A reference to the delegate should be preserved from being garbage collected.
 
-`NoMemoryCallback()` notifies when memory is not enough.
+`NoMemoryCallback()` notifies when memory is not enough. A reference to the delegate should be preserved from being garbage collected.
 
 #### Packet callbacks
 Provides per packet events.
 
-`PacketFreeCallback(Packet packet)` notifies when a packet is being destroyed.
+`PacketFreeCallback(Packet packet)` notifies when a packet is being destroyed. A reference to the delegate should be preserved from being garbage collected.
 
 ### Structures
 #### Address
@@ -330,7 +330,7 @@ Contains a managed pointer to the peer and cached ID.
 
 `Peer.IsSet` returns a state of the managed pointer.
 
-`Peer.ID` returns a peer ID.
+`Peer.ID` returns a peer ID. It's always zero on the client side.
 
 `Peer.IP` returns an IP address in a printable form.
 
