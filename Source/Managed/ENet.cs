@@ -37,7 +37,7 @@ namespace ENet {
 		NoAllocate = 1 << 2,
 		UnreliableFragmented = 1 << 3,
 		Instant = 1 << 4,
-		Crucial = 1 << 5,
+		Unthrottled = 1 << 5,
 		Sent =  1 << 8
 	}
 
@@ -89,6 +89,8 @@ namespace ENet {
 	public delegate void FreeCallback(IntPtr memory);
 	public delegate void NoMemoryCallback();
 	public delegate void PacketFreeCallback(Packet packet);
+	public delegate int InterceptCallback(ref Event @event, ref Address address, IntPtr receivedData, int receivedDataLength);
+	public delegate ulong ChecksumCallback(IntPtr buffers, int bufferCount);
 
 	internal static class ArrayPool {
 		[ThreadStatic]
@@ -271,7 +273,7 @@ namespace ENet {
 
 		public IntPtr Data {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_packet_get_data(nativePacket);
 			}
@@ -279,13 +281,13 @@ namespace ENet {
 
 		public IntPtr UserData {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_packet_get_user_data(nativePacket);
 			}
 
 			set {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				Native.enet_packet_set_user_data(nativePacket, value);
 			}
@@ -293,7 +295,7 @@ namespace ENet {
 
 		public int Length {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_packet_get_length(nativePacket);
 			}
@@ -301,25 +303,25 @@ namespace ENet {
 
 		public bool HasReferences {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_packet_check_references(nativePacket) != 0;
 			}
 		}
 
-		internal void IsCreated() {
+		internal void ThrowIfNotCreated() {
 			if (nativePacket == IntPtr.Zero)
 				throw new InvalidOperationException("Packet not created");
 		}
 
 		public void SetFreeCallback(IntPtr callback) {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			Native.enet_packet_set_free_callback(nativePacket, callback);
 		}
 
 		public void SetFreeCallback(PacketFreeCallback callback) {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			Native.enet_packet_set_free_callback(nativePacket, Marshal.GetFunctionPointerForDelegate(callback));
 		}
@@ -430,7 +432,7 @@ namespace ENet {
 
 		public uint PeersCount {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_host_get_peers_count(nativeHost);
 			}
@@ -438,7 +440,7 @@ namespace ENet {
 
 		public uint PacketsSent {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_host_get_packets_sent(nativeHost);
 			}
@@ -446,7 +448,7 @@ namespace ENet {
 
 		public uint PacketsReceived {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_host_get_packets_received(nativeHost);
 			}
@@ -454,7 +456,7 @@ namespace ENet {
 
 		public uint BytesSent {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_host_get_bytes_sent(nativeHost);
 			}
@@ -462,18 +464,18 @@ namespace ENet {
 
 		public uint BytesReceived {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_host_get_bytes_received(nativeHost);
 			}
 		}
 
-		internal void IsCreated() {
+		internal void ThrowIfNotCreated() {
 			if (nativeHost == IntPtr.Zero)
 				throw new InvalidOperationException("Host not created");
 		}
 
-		private static void IsChannelsLimited(int channelLimit) {
+		private static void ThrowIfChannelsExceeded(int channelLimit) {
 			if (channelLimit < 0 || channelLimit > Library.maxChannelCount)
 				throw new ArgumentOutOfRangeException("channelLimit");
 		}
@@ -513,7 +515,7 @@ namespace ENet {
 			if (peerLimit < 0 || peerLimit > Library.maxPeers)
 				throw new ArgumentOutOfRangeException("peerLimit");
 
-			IsChannelsLimited(channelLimit);
+			ThrowIfChannelsExceeded(channelLimit);
 
 			if (address != null) {
 				var nativeAddress = address.Value.NativeData;
@@ -528,23 +530,23 @@ namespace ENet {
 		}
 
 		public void PreventConnections(bool state) {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			Native.enet_host_prevent_connections(nativeHost, (byte)(state ? 1 : 0));
 		}
 
 		public void Broadcast(byte channelID, ref Packet packet) {
-			IsCreated();
+			ThrowIfNotCreated();
 
-			packet.IsCreated();
+			packet.ThrowIfNotCreated();
 			Native.enet_host_broadcast(nativeHost, channelID, packet.NativeData);
 			packet.NativeData = IntPtr.Zero;
 		}
 
 		public void Broadcast(byte channelID, ref Packet packet, Peer excludedPeer) {
-			IsCreated();
+			ThrowIfNotCreated();
 
-			packet.IsCreated();
+			packet.ThrowIfNotCreated();
 			Native.enet_host_broadcast_exclude(nativeHost, channelID, packet.NativeData, excludedPeer.NativeData);
 			packet.NativeData = IntPtr.Zero;
 		}
@@ -553,9 +555,9 @@ namespace ENet {
 			if (peers == null)
 				throw new ArgumentNullException("peers");
 
-			IsCreated();
+			ThrowIfNotCreated();
 
-			packet.IsCreated();
+			packet.ThrowIfNotCreated();
 
 			if (peers.Length > 0) {
 				IntPtr[] nativePeers = ArrayPool.GetPointerBuffer();
@@ -569,13 +571,16 @@ namespace ENet {
 				}
 
 				Native.enet_host_broadcast_selective(nativeHost, channelID, packet.NativeData, nativePeers, (IntPtr)nativeCount);
-			}
+				packet.NativeData = IntPtr.Zero;
+			} else {
+				packet.Dispose();
 
-			packet.NativeData = IntPtr.Zero;
+				throw new ArgumentOutOfRangeException("Peers array can't be empty");
+			}
 		}
 
 		public int CheckEvents(out Event @event) {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			ENetEvent nativeEvent;
 
@@ -601,8 +606,8 @@ namespace ENet {
 		}
 
 		public Peer Connect(Address address, int channelLimit, uint data) {
-			IsCreated();
-			IsChannelsLimited(channelLimit);
+			ThrowIfNotCreated();
+			ThrowIfChannelsExceeded(channelLimit);
 
 			var nativeAddress = address.NativeData;
 			var peer = new Peer(Native.enet_host_connect(nativeHost, ref nativeAddress, (IntPtr)channelLimit, data));
@@ -617,7 +622,7 @@ namespace ENet {
 			if (timeout < 0)
 				throw new ArgumentOutOfRangeException("timeout");
 
-			IsCreated();
+			ThrowIfNotCreated();
 
 			ENetEvent nativeEvent;
 
@@ -635,20 +640,50 @@ namespace ENet {
 		}
 
 		public void SetBandwidthLimit(uint incomingBandwidth, uint outgoingBandwidth) {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			Native.enet_host_bandwidth_limit(nativeHost, incomingBandwidth, outgoingBandwidth);
 		}
 
 		public void SetChannelLimit(int channelLimit) {
-			IsCreated();
-			IsChannelsLimited(channelLimit);
+			ThrowIfNotCreated();
+			ThrowIfChannelsExceeded(channelLimit);
 
 			Native.enet_host_channel_limit(nativeHost, (IntPtr)channelLimit);
 		}
 
+		public void SetMaxDuplicatePeers(ushort number) {
+			ThrowIfNotCreated();
+
+			Native.enet_host_set_max_duplicate_peers(nativeHost, number);
+		}
+
+		public void SetInterceptCallback(IntPtr callback) {
+			ThrowIfNotCreated();
+
+			Native.enet_host_set_intercept_callback(nativeHost, callback);
+		}
+
+		public void SetInterceptCallback(InterceptCallback callback) {
+			ThrowIfNotCreated();
+
+			Native.enet_host_set_intercept_callback(nativeHost, Marshal.GetFunctionPointerForDelegate(callback));
+		}
+
+		public void SetChecksumCallback(IntPtr callback) {
+			ThrowIfNotCreated();
+
+			Native.enet_host_set_checksum_callback(nativeHost, callback);
+		}
+
+		public void SetChecksumCallback(ChecksumCallback callback) {
+			ThrowIfNotCreated();
+
+			Native.enet_host_set_checksum_callback(nativeHost, Marshal.GetFunctionPointerForDelegate(callback));
+		}
+
 		public void Flush() {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			Native.enet_host_flush(nativeHost);
 		}
@@ -687,7 +722,7 @@ namespace ENet {
 
 		public string IP {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				byte[] ip = ArrayPool.GetByteBuffer();
 
@@ -700,7 +735,7 @@ namespace ENet {
 
 		public ushort Port {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_peer_get_port(nativePeer);
 			}
@@ -708,7 +743,7 @@ namespace ENet {
 
 		public uint MTU {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_peer_get_mtu(nativePeer);
 			}
@@ -722,7 +757,7 @@ namespace ENet {
 
 		public uint RoundTripTime {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_peer_get_rtt(nativePeer);
 			}
@@ -730,7 +765,7 @@ namespace ENet {
 
 		public uint LastRoundTripTime {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_peer_get_last_rtt(nativePeer);
 			}
@@ -738,7 +773,7 @@ namespace ENet {
 
 		public uint LastSendTime {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_peer_get_lastsendtime(nativePeer);
 			}
@@ -746,7 +781,7 @@ namespace ENet {
 
 		public uint LastReceiveTime {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_peer_get_lastreceivetime(nativePeer);
 			}
@@ -754,7 +789,7 @@ namespace ENet {
 
 		public ulong PacketsSent {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_peer_get_packets_sent(nativePeer);
 			}
@@ -762,15 +797,23 @@ namespace ENet {
 
 		public ulong PacketsLost {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_peer_get_packets_lost(nativePeer);
 			}
 		}
 
+		public float PacketsThrottle {
+			get {
+				ThrowIfNotCreated();
+
+				return Native.enet_peer_get_packets_throttle(nativePeer);
+			}
+		}
+
 		public ulong BytesSent {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_peer_get_bytes_sent(nativePeer);
 			}
@@ -778,7 +821,7 @@ namespace ENet {
 
 		public ulong BytesReceived {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_peer_get_bytes_received(nativePeer);
 			}
@@ -786,39 +829,39 @@ namespace ENet {
 
 		public IntPtr Data {
 			get {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				return Native.enet_peer_get_data(nativePeer);
 			}
 
 			set {
-				IsCreated();
+				ThrowIfNotCreated();
 
 				Native.enet_peer_set_data(nativePeer, value);
 			}
 		}
 
-		internal void IsCreated() {
+		internal void ThrowIfNotCreated() {
 			if (nativePeer == IntPtr.Zero)
 				throw new InvalidOperationException("Peer not created");
 		}
 
 		public void ConfigureThrottle(uint interval, uint acceleration, uint deceleration, uint threshold) {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			Native.enet_peer_throttle_configure(nativePeer, interval, acceleration, deceleration, threshold);
 		}
 
 		public bool Send(byte channelID, ref Packet packet) {
-			IsCreated();
+			ThrowIfNotCreated();
 
-			packet.IsCreated();
+			packet.ThrowIfNotCreated();
 
 			return Native.enet_peer_send(nativePeer, channelID, packet.NativeData) == 0;
 		}
 
 		public bool Receive(out byte channelID, out Packet packet) {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			IntPtr nativePacket = Native.enet_peer_receive(nativePeer, out channelID);
 
@@ -834,43 +877,43 @@ namespace ENet {
 		}
 
 		public void Ping() {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			Native.enet_peer_ping(nativePeer);
 		}
 
 		public void PingInterval(uint interval) {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			Native.enet_peer_ping_interval(nativePeer, interval);
 		}
 
 		public void Timeout(uint timeoutLimit, uint timeoutMinimum, uint timeoutMaximum) {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			Native.enet_peer_timeout(nativePeer, timeoutLimit, timeoutMinimum, timeoutMaximum);
 		}
 
 		public void Disconnect(uint data) {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			Native.enet_peer_disconnect(nativePeer, data);
 		}
 
 		public void DisconnectNow(uint data) {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			Native.enet_peer_disconnect_now(nativePeer, data);
 		}
 
 		public void DisconnectLater(uint data) {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			Native.enet_peer_disconnect_later(nativePeer, data);
 		}
 
 		public void Reset() {
-			IsCreated();
+			ThrowIfNotCreated();
 
 			Native.enet_peer_reset(nativePeer);
 		}
@@ -893,7 +936,7 @@ namespace ENet {
 		public const uint maxChannelCount = 0xFF;
 		public const uint maxPeers = 0xFFF;
 		public const uint maxPacketSize = 32 * 1024 * 1024;
-		public const uint throttleThreshold = 20;
+		public const uint throttleThreshold = 40;
 		public const uint throttleScale = 32;
 		public const uint throttleAcceleration = 2;
 		public const uint throttleDeceleration = 2;
@@ -901,15 +944,27 @@ namespace ENet {
 		public const uint timeoutLimit = 32;
 		public const uint timeoutMinimum = 5000;
 		public const uint timeoutMaximum = 30000;
-		public const uint version = (2 << 16) | (3 << 8) | (8);
+		public const uint version = (2 << 16) | (4 << 8) | (8);
+
+		public static uint Time {
+			get {
+				return Native.enet_time_get();
+			}
+		}
 
 		public static bool Initialize() {
+			if (Native.enet_linked_version() != version)
+				throw new InvalidOperationException("Incompatible version");
+
 			return Native.enet_initialize() == 0;
 		}
 
 		public static bool Initialize(Callbacks callbacks) {
 			if (callbacks == null)
 				throw new ArgumentNullException("callbacks");
+
+			if (Native.enet_linked_version() != version)
+				throw new InvalidOperationException("Incompatible version");
 
 			ENetCallbacks nativeCallbacks = callbacks.NativeData;
 
@@ -920,10 +975,8 @@ namespace ENet {
 			Native.enet_deinitialize();
 		}
 
-		public static uint Time {
-			get {
-				return Native.enet_time_get();
-			}
+		public static ulong CRC64(IntPtr buffers, int bufferCount) {
+			return Native.enet_crc64(buffers, bufferCount);
 		}
 	}
 
@@ -945,7 +998,13 @@ namespace ENet {
 		internal static extern void enet_deinitialize();
 
 		[DllImport(nativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+		internal static extern uint enet_linked_version();
+
+		[DllImport(nativeLibrary, CallingConvention = CallingConvention.Cdecl)]
 		internal static extern uint enet_time_get();
+
+		[DllImport(nativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+		internal static extern ulong enet_crc64(IntPtr buffers, int bufferCount);
 
 		[DllImport(nativeLibrary, CallingConvention = CallingConvention.Cdecl)]
 		internal static extern int enet_address_set_ip(ref ENetAddress address, string ip);
@@ -1038,6 +1097,15 @@ namespace ENet {
 		internal static extern uint enet_host_get_bytes_received(IntPtr host);
 
 		[DllImport(nativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+		internal static extern void enet_host_set_max_duplicate_peers(IntPtr host, ushort number);
+
+		[DllImport(nativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+		internal static extern void enet_host_set_intercept_callback(IntPtr host, IntPtr callback);
+
+		[DllImport(nativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+		internal static extern void enet_host_set_checksum_callback(IntPtr host, IntPtr callback);
+
+		[DllImport(nativeLibrary, CallingConvention = CallingConvention.Cdecl)]
 		internal static extern void enet_host_flush(IntPtr host);
 
 		[DllImport(nativeLibrary, CallingConvention = CallingConvention.Cdecl)]
@@ -1081,6 +1149,9 @@ namespace ENet {
 
 		[DllImport(nativeLibrary, CallingConvention = CallingConvention.Cdecl)]
 		internal static extern ulong enet_peer_get_packets_lost(IntPtr peer);
+
+		[DllImport(nativeLibrary, CallingConvention = CallingConvention.Cdecl)]
+		internal static extern float enet_peer_get_packets_throttle(IntPtr peer);
 
 		[DllImport(nativeLibrary, CallingConvention = CallingConvention.Cdecl)]
 		internal static extern ulong enet_peer_get_bytes_sent(IntPtr peer);
